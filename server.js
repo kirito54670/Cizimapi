@@ -1,64 +1,90 @@
 const express = require("express");
 const fetch = require("node-fetch");
-const app = express();
+const { MongoClient } = require("mongodb");
+const crypto = require("crypto");
 
+const app = express();
 app.use(express.json());
 
-app.get("/draw", async (req, res) => {
-  const { apikey, text } = req.query;
+const uri = process.env.MONGO_URI || "mongodb://localhost:27017";
+const dab = "drawapi";
+const collector = "images";
 
-  if (!apikey) return res.status(400).json({ success: false, error: "API anahtarı (apikey) eksik!" });
-  if (!text) return res.status(400).json({ success: false, error: "Çizim metni (text) eksik!" });
+MongoClient.connect(uri, { useUnifiedTopology: true })
+  .then(client => {
+    const db = client.db(dab);
+    const images = db.collection(collector);
+    console.log("MongoDB Bağlantısı Başarılı!");
 
-  try {
-    // Gemini 2.5 Flash Image API isteği
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${apikey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: text
-            }]
-          }],
-          generationConfig: {
-            responseModalities: ["IMAGE"]
+    app.post("/draw", (req, res) => {
+      const { apikey, text, reference_image_base64 } = req.body;
+
+      if (!apikey) return res.json({ success: false, error: "Api Key Eksik!" });
+      if (!text) return res.json({ success: false, error: "Metin Gir!" });
+
+      const body = { prompt: { text } };
+      if (reference_image_base64)
+        body.referenceImage = { imageData: reference_image_base64 };
+
+      fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateImage?key=${apikey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      )
+        .then(response => response.json())
+        .then(data => {
+          const base64 = data?.generatedImages?.[0]?.imageData;
+
+          if (!base64) {
+            return res.json({
+              success: false,
+              error: data.error?.message || "Görsel Oluşturulamadı!",
+            });
           }
-        }),
-      }
+
+          const key = crypto.randomBytes(12).toString("hex");
+
+          images
+            .insertOne({
+              key,
+              prompt: text,
+              image_base64: base64,
+              createdAt: new Date(),
+            })
+            .then(() => {
+              res.json({
+                success: true,
+                prompt: text,
+                key,
+                url: `${req.protocol}://${req.get("host")}/image/${key}`,
+              });
+            })
+            .catch(err => res.json({ success: false, error: err.message }));
+        })
+        .catch(err => res.json({ success: false, error: err.message }));
+    });
+
+    app.get("/image/:key", (req, res) => {
+      const key = req.params.key;
+      if (!key) return res.status(400).send("Anahtar Gerekli!");
+
+      images
+        .findOne({ key })
+        .then(doc => {
+          if (!doc) return res.status(404).send("Görsel Bulunamadı!");
+          const buffer = Buffer.from(doc.image_base64, "base64");
+          res.setHeader("Content-Type", "image/png");
+          res.send(buffer);
+        })
+        .catch(err => res.status(500).send(err.message));
+    });
+
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () =>
+      console.log(`Gemini Çizim & Görsel Sunucu Aktif: ${PORT}`)
     );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      return res.status(500).json({
-        success: false,
-        error: `API Error: ${response.status} - ${errorText}`
-      });
-    }
-
-    const data = await response.json();
-
-    // inlineData'dan base64 görsel al
-    const base64 = data?.candidates?.[0]?.content?.parts?.find(part => part.inlineData)?.inlineData?.data;
-
-    if (!base64) {
-      return res.status(500).json({
-        success: false,
-        error: "Görsel oluşturulamadı.",
-        debug: JSON.stringify(data)
-      });
-    }
-
-    // Base64'ü buffer'a çevir ve PNG olarak gönder
-    const buffer = Buffer.from(base64, "base64");
-    res.setHeader("Content-Type", "image/png");
-    res.send(buffer);
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-const PORT = 3000;
-app.listen(PORT, () => console.log(`✅ Gemini çizim API aktif: ${PORT}`));
+  })
+  .catch(err => console.error("MongoDB Bağlantısı Başarısız:", err));

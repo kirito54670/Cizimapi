@@ -5,7 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Ortam değişkeni olarak ayarlanacak (Render'da)
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEY = AIzaSyB5KJbn43BWIy0c25HDyy3KeOWvozB9YpY;
 
 app.get("/", (req, res) => {
   res.send("✅ Gemini Image API is running!");

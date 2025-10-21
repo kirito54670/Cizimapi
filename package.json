@@ -1,8 +1,9 @@
 {
   "name": "gemini-draw-api",
   "version": "1.0.0",
-  "description": "Gemini ile çizim yapan, in-memory görsel saklayan Express API",
+  "description": "Gemini ile çizim yapan Express API",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
